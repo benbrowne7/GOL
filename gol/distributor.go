@@ -17,6 +17,12 @@ type distributorChannels struct {
 
 
 
+func makeImmutableMatrix(matrix [][]uint8) func(y, x int) uint8 {
+	return func(y, x int) uint8 {
+		return matrix[y][x]
+	}
+}
+
 func calculateAliveCells(p Params, world [][]byte) []util.Cell {
 	alive := make([]util.Cell,0)
 	height := p.ImageHeight
@@ -51,18 +57,16 @@ func checkSurrounding(i, z, dimension int, neww [][]byte) int {
 	return x
 }
 
-func calculateNextState(p Params, world [][]byte) [][]byte {
-	neww := make([][]byte, p.ImageHeight)
+func calculateNextState(h int, w int, world [][]byte) [][]byte {
+	neww := make([][]byte, h)
 	for i := range neww {
-		neww[i] = make([]byte, p.ImageWidth)
+		neww[i] = make([]byte, w)
 		copy(neww[i], world[i][:])
 	}
-	h := p.ImageHeight
-	w := p.ImageWidth
 
 	for i:=0; i<h; i++ {
 		for z:=0; z<w; z++ {
-			alive := checkSurrounding(i,z,p.ImageHeight,world)
+			alive := checkSurrounding(i,z,h,world)
 			if world[i][z] == 0 && alive==3 {neww[i][z] = 255
 			} else {
 				if world[i][z] == 255 && (alive<2 || alive>3) {neww[i][z] = 0}
@@ -72,18 +76,20 @@ func calculateNextState(p Params, world [][]byte) [][]byte {
 	return neww
 }
 
-func gameOfLife(p Params, initialWorld [][]byte, turn int) [][]byte {
+func gameOfLife(sy, ey, sx, ex int, initialWorld [][]byte, p Params) [][]byte {
 	world := initialWorld
 	for i := 0; i < p.Turns; i++ {
-		world = calculateNextState(p, world)
-		turn++
+		world = calculateNextState(p.ImageHeight, p.ImageWidth, world)
 	}
 	return world
+}
+func worker(startY, endY, startX, endX int, initial [][]byte, out chan<- [][]uint8, p Params) {
+	theMatrix := gameOfLife(startY,endY, startX, endX, initial, p)
+	out <- theMatrix
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
 func distributor(p Params, c distributorChannels) {
-	fmt.Println("in distributor")
 	filename := strconv.Itoa(p.ImageWidth) + "x" + strconv.Itoa(p.ImageHeight)
 	c.ioCommand <- ioInput
 	c.ioFilename <- filename
@@ -100,18 +106,53 @@ func distributor(p Params, c distributorChannels) {
 			inital[y][x] = byte
 		}
 	}
-	fmt.Println("world initialised")
+
+	fmt.Println("distributor initialised world")
 	turn := 0
 
+	var finalData [][]uint8
+
+
+	//create channels for each worker thread
+	chanz := make([]chan [][]uint8, p.Threads)
+	for i:=0; i<p.Threads; i++ {
+		chanz[i] = make(chan [][]uint8)
+	}
+
+
+	x := p.ImageHeight/p.Threads
+	start := 0
+	end := x
+
+	if p.Threads == 1 {
+		go worker(0,p.ImageHeight,0,p.ImageWidth,inital,chanz[0], p)
+	} else {
+		for i:=1; i<=p.Threads; i++ {
+			go worker(start,end,0,p.ImageWidth,inital,chanz[i-1],p)
+			start = start + x
+			if i==p.Threads-1 {
+				end = p.ImageHeight
+			} else {
+				end = end + x
+			}
+		}
+	}
+	for i:=0; i<p.Threads; i++ {
+		y := <- chanz[i]
+		close(chanz[i])
+		finalData = append(finalData, y...)
+	}
+
+
 	// TODO: Execute all turns of the Game of Life.
-	newWorld := gameOfLife(p, inital, turn)
-	alive := calculateAliveCells(p, newWorld)
+	alive := calculateAliveCells(p, finalData)
 	fmt.Println("turns executed")
+
 
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
 	final := FinalTurnComplete{
-		CompletedTurns: turn,
+		CompletedTurns: p.Turns,
 		Alive:          alive,
 	}
 	c.events <- final
