@@ -3,6 +3,7 @@ package gol
 import (
 	"fmt"
 	"strconv"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
 
@@ -16,20 +17,23 @@ type distributorChannels struct {
 }
 
 
-
-func makeImmutableMatrix(matrix [][]uint8) func(y, x int) uint8 {
-	return func(y, x int) uint8 {
-		return matrix[y][x]
+func nAlive(p Params, world [][]byte) int {
+	c := 0
+	for i:= 0; i<p.ImageHeight; i++ {
+		for z:= 0; z<p.ImageWidth; z++ {
+			if world[i][z] == 255 {
+				c++
+			}
+		}
 	}
+	return c
 }
 
 func calculateAliveCells(p Params, world [][]byte) []util.Cell {
 	alive := make([]util.Cell,0)
-	height := p.ImageHeight
-	width := p.ImageWidth
 
-	for i:=0; i<height; i++ {
-		for z:=0; z<width; z++ {
+	for i:=0; i<p.ImageHeight; i++ {
+		for z:=0; z<p.ImageWidth; z++ {
 			if world[i][z]==255 {
 				var x util.Cell
 				x.X = z
@@ -76,16 +80,73 @@ func calculateNextState(h int, w int, world [][]byte) [][]byte {
 	return neww
 }
 
-func gameOfLife(sy, ey, sx, ex int, initialWorld [][]byte, p Params) [][]byte {
+func gameOfLife(sy, ey, sx, ex int, initialWorld [][]byte, p Params, everytwo chan bool, nalive chan int, test chan bool) [][]byte {
 	world := initialWorld
 	for i := 0; i < p.Turns; i++ {
-		world = calculateNextState(p.ImageHeight, p.ImageWidth, world)
+		select {
+		case command := <- everytwo:
+			switch command {
+			case true:
+				x := nAlive(p, world)
+				nalive <- x
+				fmt.Println("x:", x)
+			}
+			default:
+				test <- true
+				world = calculateNextState(p.ImageHeight, p.ImageWidth, world)
+		}
 	}
 	return world
 }
-func worker(startY, endY, startX, endX int, initial [][]byte, out chan<- [][]uint8, p Params) {
-	theMatrix := gameOfLife(startY,endY, startX, endX, initial, p)
+func worker(startY, endY, startX, endX int, initial [][]byte, out chan<- [][]uint8, p Params, everytwo chan bool, nalive chan int, turn int, test chan bool) {
+	theMatrix := gameOfLife(startY,endY, startX, endX, initial, p, everytwo, nalive, test)
 	out <- theMatrix
+}
+
+
+func ticka(everytwo chan bool, nalive chan int, count chan int) {
+	ticker := time.NewTicker(2 * time.Second)
+	for _ = range ticker.C {
+		everytwo <- true
+		go bufferget(nalive, count)
+	}
+}
+func bufferget(nalive chan int, count chan int) {
+	x := <- nalive
+	fmt.Println("in bufferget")
+	//for i := range nalive {
+	//	x = x + i
+	//	fmt.Println("adding up alive")
+	//}
+	count <- x
+	fmt.Println("sent value to count:", x)
+
+}
+func aliveSender(count chan int, turn *int, c distributorChannels) {
+	for {
+		fmt.Println("aliveSender waiting...")
+		x := <- count
+		fmt.Println("alivesender recieved to x")
+		aliveEvent := AliveCellsCount{
+			CompletedTurns: *turn,
+			CellsCount:     x,
+		}
+		c.events <- aliveEvent
+	}
+}
+
+func turncounter(test chan bool, turn *int, c distributorChannels, p Params) {
+	var y = float32(p.Threads)
+	var x float32 = 0
+	for {
+		<- test
+		x = x + 1/y
+		if x==1 {
+			*turn++
+			c.events <- TurnComplete{CompletedTurns: *turn}
+			x = 0
+		}
+	}
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -124,11 +185,21 @@ func distributor(p Params, c distributorChannels) {
 	start := 0
 	end := x
 
+	//create chan for sending n. alive
+	nalive := make(chan int, p.Threads)
+	everytwo := make(chan bool)
+	count := make(chan int)
+	test := make(chan bool)
+	go ticka(everytwo, nalive, count)
+	go aliveSender(count, &turn, c)
+	go turncounter(test, &turn, c, p)
+	fmt.Println("aliveSender+ticker routines started")
+
 	if p.Threads == 1 {
-		go worker(0,p.ImageHeight,0,p.ImageWidth,inital,chanz[0], p)
+		go worker(0,p.ImageHeight,0,p.ImageWidth,inital,chanz[0], p, everytwo, nalive, turn, test)
 	} else {
 		for i:=1; i<=p.Threads; i++ {
-			go worker(start,end,0,p.ImageWidth,inital,chanz[i-1],p)
+			go worker(start,end,0,p.ImageWidth,inital,chanz[i-1],p, everytwo, nalive, turn, test)
 			start = start + x
 			if i==p.Threads-1 {
 				end = p.ImageHeight
