@@ -3,8 +3,12 @@ package gol
 import (
 	"fmt"
 	"strconv"
+	"sync"
+	"time"
 	"uk.ac.bris.cs/gameoflife/util"
 )
+
+var wg sync.WaitGroup
 
 type distributorChannels struct {
 	events     chan<- Event
@@ -16,20 +20,23 @@ type distributorChannels struct {
 }
 
 
-
-func makeImmutableMatrix(matrix [][]uint8) func(y, x int) uint8 {
-	return func(y, x int) uint8 {
-		return matrix[y][x]
+func nAlive(p Params, world [][]byte) int {
+	c := 0
+	for i:= 0; i<p.ImageHeight; i++ {
+		for z:= 0; z<p.ImageWidth; z++ {
+			if world[i][z] == 255 {
+				c++
+			}
+		}
 	}
+	return c
 }
 
 func calculateAliveCells(p Params, world [][]byte) []util.Cell {
 	alive := make([]util.Cell,0)
-	height := p.ImageHeight
-	width := p.ImageWidth
 
-	for i:=0; i<height; i++ {
-		for z:=0; z<width; z++ {
+	for i:=0; i<p.ImageHeight; i++ {
+		for z:=0; z<p.ImageWidth; z++ {
 			if world[i][z]==255 {
 				var x util.Cell
 				x.X = z
@@ -39,6 +46,51 @@ func calculateAliveCells(p Params, world [][]byte) []util.Cell {
 		}
 	}
 	return alive
+}
+
+func ticka(everytwo chan bool, nalive chan int, count chan int) {
+	ticker := time.NewTicker(2 * time.Second)
+	for _ = range ticker.C {
+		everytwo <- true
+		go bufferget(nalive, count)
+	}
+}
+func bufferget(nalive chan int, count chan int) {
+	x := <- nalive
+	fmt.Println("in bufferget")
+	//for i := range nalive {
+	//	x = x + i
+	//	fmt.Println("adding up alive")
+	//}
+	count <- x
+	fmt.Println("sent value to count:", x)
+
+}
+func aliveSender(count chan int, turn *int, c distributorChannels) {
+	for {
+		fmt.Println("aliveSender waiting...")
+		x := <- count
+		fmt.Println("alivesender recieved to x")
+		aliveEvent := AliveCellsCount{
+			CompletedTurns: *turn,
+			CellsCount:     x,
+		}
+		c.events <- aliveEvent
+	}
+}
+
+func turnCounter(test chan bool, turn *int, c distributorChannels, p Params) {
+	var y = float32(p.Threads)
+	var x float32 = 0
+	for {
+		<- test
+		x = x + 1/y
+		if x==1 {
+			*turn++
+			c.events <- TurnComplete{CompletedTurns: *turn}
+			x = 0
+		}
+	}
 }
 
 func mod(a, b int) int {
@@ -57,14 +109,14 @@ func checkSurrounding(i, z, dimension int, neww [][]byte) int {
 	return x
 }
 
-func calculateNextState(h int, w int, world [][]byte) [][]byte {
+func calculateNextState(sy, ey, h int, w int, world [][]byte) [][]byte {
 	neww := make([][]byte, h)
 	for i := range neww {
 		neww[i] = make([]byte, w)
 		copy(neww[i], world[i][:])
 	}
 
-	for i:=0; i<h; i++ {
+	for i:=sy; i<ey; i++ {
 		for z:=0; z<w; z++ {
 			alive := checkSurrounding(i,z,h,world)
 			if world[i][z] == 0 && alive==3 {neww[i][z] = 255
@@ -76,16 +128,59 @@ func calculateNextState(h int, w int, world [][]byte) [][]byte {
 	return neww
 }
 
-func gameOfLife(sy, ey, sx, ex int, initialWorld [][]byte, p Params) [][]byte {
+func gameOfLife(sy, ey int, initialWorld [][]byte, p Params, everytwo chan bool, nalive chan int, test, next chan bool) [][]byte {
 	world := initialWorld
-	for i := 0; i < p.Turns; i++ {
-		world = calculateNextState(p.ImageHeight, p.ImageWidth, world)
+	select {
+	case command := <- everytwo:
+		switch command {
+		case true:
+			x := nAlive(p, world)
+			nalive <- x
+			fmt.Println("x:", x)
+		}
+	default:
+		test <- true
+		world = calculateNextState(sy, ey, p.ImageHeight, p.ImageWidth, world)
 	}
 	return world
 }
-func worker(startY, endY, startX, endX int, initial [][]byte, out chan<- [][]uint8, p Params) {
-	theMatrix := gameOfLife(startY,endY, startX, endX, initial, p)
-	out <- theMatrix
+func worker(startY, endY int, initial [][]byte, iteration chan<- [][]byte, p Params, everytwo chan bool, nalive chan int, test, next chan bool) {
+	theMatrix := gameOfLife(startY,endY, initial, p, everytwo, nalive, test, next)
+	iteration <- theMatrix[startY:endY][0:]
+	fmt.Println("work sent to iteration")
+}
+
+
+func controller(ratio int, p Params, iteration, chanz []chan [][]uint8, world [][]byte, nalive chan int, everytwo, test, next chan bool) [][]byte {
+	start := 0
+	end := ratio
+	temp := make(chan [][]byte)
+	go iterationMaker(iteration, temp)
+	if p.Threads == 1 {
+		go worker(0,p.ImageHeight,world,iteration[0], p, everytwo, nalive, test, next)
+	} else {
+		for i:=1; i<=p.Threads; i++ {
+			go worker(start,end,world,iteration[i-1],p, everytwo, nalive, test, next)
+			start = start + ratio
+			if i==p.Threads-1 {
+				end = p.ImageHeight
+			} else {
+				end = end + ratio
+			}
+		}
+	}
+	x := <- temp
+	return x
+}
+
+func iterationMaker(iteration []chan [][]byte, temp chan [][]byte) {
+	var world [][]byte
+	for x := range iteration {
+		y := <- iteration[x]
+		world = append(world, y...)
+	}
+	temp <- world
+	fmt.Println("iteration made and sent")
 }
 
 // distributor divides the work between workers and interacts with other goroutines.
@@ -118,36 +213,43 @@ func distributor(p Params, c distributorChannels) {
 	for i:=0; i<p.Threads; i++ {
 		chanz[i] = make(chan [][]uint8)
 	}
+	iteration := make([]chan [][]uint8, p.Threads)
+	for i:=0; i<p.Threads; i++ {
+		iteration[i] = make(chan [][]uint8)
+	}
 
 
 	x := p.ImageHeight/p.Threads
-	start := 0
-	end := x
 
-	if p.Threads == 1 {
-		go worker(0,p.ImageHeight,0,p.ImageWidth,inital,chanz[0], p)
-	} else {
-		for i:=1; i<=p.Threads; i++ {
-			go worker(start,end,0,p.ImageWidth,inital,chanz[i-1],p)
-			start = start + x
-			if i==p.Threads-1 {
-				end = p.ImageHeight
-			} else {
-				end = end + x
-			}
-		}
+
+	//create chan for sending n. alive
+	nalive := make(chan int, p.Threads)
+	everytwo := make(chan bool)
+	count := make(chan int)
+	test := make(chan bool)
+	next := make(chan bool)
+
+	go ticka(everytwo, nalive, count)
+	go aliveSender(count, &turn, c)
+	go turnCounter(test, &turn, c, p)
+	fmt.Println("aliveSender+ticker routines started")
+
+	for i:=0; i<p.Turns; i++ {
+		inital = controller(x, p, iteration, chanz, inital, nalive, everytwo, test, next)
 	}
-	for i:=0; i<p.Threads; i++ {
-		y := <- chanz[i]
-		close(chanz[i])
-		finalData = append(finalData, y...)
-	}
+	finalData = inital
+
+
+	//for i:=0; i<p.Threads; i++ {
+	//	y := <- chanz[i]
+	//	close(chanz[i])
+	//	finalData = append(finalData, y...)
+	//}
 
 
 	// TODO: Execute all turns of the Game of Life.
 	alive := calculateAliveCells(p, finalData)
 	fmt.Println("turns executed")
-
 
 
 	// TODO: Report the final state using FinalTurnCompleteEvent.
@@ -157,7 +259,6 @@ func distributor(p Params, c distributorChannels) {
 	}
 	c.events <- final
 	fmt.Println("final state sent")
-
 
 	// Make sure that the Io has finished any output before exiting.
 	c.ioCommand <- ioCheckIdle
