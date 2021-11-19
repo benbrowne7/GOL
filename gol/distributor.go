@@ -191,6 +191,7 @@ func distributor(p Params, c distributorChannels) {
 	var finalData [][]uint8
 
 
+
 	//create channels for each worker thread
 	iteration := make([]chan [][]byte, p.Threads)
 	for i:=0; i<p.Threads; i++ {
@@ -229,6 +230,29 @@ func distributor(p Params, c distributorChannels) {
 	finalData = world
 
 
+	//writing world to .pgm file
+	c.ioCommand <- ioOutput
+	fileout := filename + "x" + strconv.Itoa(p.Turns) + "-" + strconv.Itoa(p.Threads)
+	fmt.Printf("filename: %s\n", fileout)
+	c.ioFilename <- fileout
+	for i:=0; i<p.ImageHeight; i++ {
+		for z:=0; z<p.ImageWidth; z++{
+			c.ioOutput <- finalData[i][z]
+		}
+	}
+
+	// Make sure that the Io has finished any output before exiting.
+	c.ioCommand <- ioCheckIdle
+	<-c.ioIdle
+
+
+	imageevent := ImageOutputComplete{
+		CompletedTurns: turn,
+		Filename:       fileout,
+	}
+	c.events <- imageevent
+
+
 	// TODO: Execute all turns of the Game of Life.
 	alive := calculateAliveCells(p, finalData)
 	fmt.Println("turns executed")
@@ -241,10 +265,6 @@ func distributor(p Params, c distributorChannels) {
 	}
 	c.events <- final
 	fmt.Println("final state sent")
-
-	// Make sure that the Io has finished any output before exiting.
-	c.ioCommand <- ioCheckIdle
-	<-c.ioIdle
 
 	c.events <- StateChange{turn, Quitting}
 
