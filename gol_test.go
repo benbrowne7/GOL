@@ -112,8 +112,6 @@ func readAliveCells(path string, width, height int) []util.Cell {
 
 	image := []byte(fields[4])
 
-	fmt.Printf("'%s' has length %d\n", fields[4], len(image))
-
 	var cells []util.Cell
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
