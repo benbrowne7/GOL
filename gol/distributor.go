@@ -143,7 +143,7 @@ func controller(ratio int, p Params, iteration []chan [][]byte, world [][]byte, 
 	start := 0
 	end := ratio
 	temp := make(chan [][]byte)
-	go iterationMaker(iteration, temp)
+	go iterationMaker(iteration, temp, p)
 	if p.Threads == 1 {
 		go worker(0,p.ImageHeight,world,iteration[0], p, turn, c)
 	} else {
@@ -161,13 +161,18 @@ func controller(ratio int, p Params, iteration []chan [][]byte, world [][]byte, 
 	return x
 }
 //receives each slice from the workers and puts them back together, sends down temp chan
-func iterationMaker(iteration []chan [][]byte, temp chan [][]byte) {
-	var world [][]byte
-	for x := range iteration {
-		y := <- iteration[x]
-		world = append(world, y...)
+func iterationMaker(iteration []chan [][]byte, temp chan [][]byte, p Params) {
+	if p.Threads==1 {
+		g := <- iteration[0]
+		temp <- g
+	} else {
+		var world [][]byte
+		for x := range iteration {
+			y := <- iteration[x]
+			world = append(world, y...)
+		}
+		temp <- world
 	}
-	temp <- world
 }
 
 //func for making/sending different states

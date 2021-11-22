@@ -32,7 +32,6 @@ func Run(p Params, events chan<- Event, keyPresses <-chan rune) {
 		input:    in,
 	}
 	go startIo(p, ioChannels)
-	fmt.Println("startIo go routine")
 
 	distributorChannels := distributorChannels{
 		events:     events,
