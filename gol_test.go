@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"uk.ac.bris.cs/gameoflife/gol"
@@ -13,20 +14,34 @@ import (
 )
 
 
+
+//to run:  go test -run=Bench -bench BenchmarkGol
 func BenchmarkGol(b *testing.B) {
 	// Disable all program output apart from benchmark results
 	os.Stdout = nil
-	test := gol.Params{ImageWidth: 512, ImageHeight: 512}
-	test.Turns = 100
-	for threads := 1; threads <= 16; threads *= 2 {
+	var wg sync.WaitGroup
+	test := gol.Params{ImageWidth: 512, ImageHeight: 512, Turns: 1000}
+	for threads := 1; threads <= 16; threads++ {
 		test.Threads = threads
 		testName := fmt.Sprintf("%dx%dx%d-%d", test.ImageWidth, test.ImageHeight, test.Turns, test.Threads)
 		b.Run(testName, func(b *testing.B) {
-			for i := 0; i < 5; i++ {
+			for i := 0; i<b.N; i++ {
+				wg.Add(1)
 				events := make(chan gol.Event)
-				go gol.Run(test, events, nil)
+				go func() {
+					defer wg.Done()
+					gol.Run(test, events, nil)
+				}()
+				var cells []util.Cell
+				for event := range events {
+					switch e := event.(type) {
+					case gol.FinalTurnComplete:
+						e.Alive = cells
+					}
+				}
 			}
 		})
+		wg.Wait()
 	}
 }
 

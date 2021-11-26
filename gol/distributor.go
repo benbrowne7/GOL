@@ -315,7 +315,7 @@ func distributor(p Params, c distributorChannels, k <-chan rune) {
 	fmt.Println("aliveSender+ticker routines started")
 
 	//logic to control whether a turn is executed, execution paused or AliveCellCount funcs
-    world := inital
+	world := inital
 	for i:=0; i<p.Turns; i++ {
 		select {
 		case command := <- everytwo:
