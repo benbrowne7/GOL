@@ -125,6 +125,12 @@ func readAliveCells(path string, width, height int) []util.Cell {
 
 	fields := strings.Fields(string(data))
 
+	//fmt.Println("fields [0]: ",fields[0])
+	//fmt.Println("fields [1]: ",fields[1])
+	//fmt.Println("fields [2]: ",fields[2])
+	//fmt.Println("fields [3]: ",fields[3])
+	//fmt.Println("fields [4]: ",fields[4])
+
 	if fields[0] != "P5" {
 		panic("Not a pgm file")
 	}
