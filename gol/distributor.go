@@ -204,7 +204,12 @@ func imageOut(turn int, fileout string, c distributorChannels) {
 //sends 'world' data byte by byte down c.ioOutput
 func sendWorld(world [][]byte, c distributorChannels, p Params, filename string, turn int) {
 	c.ioCommand <- ioOutput
-	fileout := filename + "x" + strconv.Itoa(turn) + "-" + strconv.Itoa(p.Threads)
+	fileout := ""
+	if p.Turns == 0 {
+		fileout = filename + "x" + strconv.Itoa(turn)
+	} else {
+		fileout = filename + "x" + strconv.Itoa(turn) + "-" + strconv.Itoa(p.Threads)
+	}
 	c.ioFilename <- fileout
 	for i:=0; i<p.ImageHeight; i++ {
 		for z:=0; z<p.ImageWidth; z++{
@@ -339,8 +344,11 @@ func distributor(p Params, c distributorChannels, k <-chan rune) {
 			turn++
 		}
 	}
-	finalData = world
-
+	if p.Turns == 0 {
+		finalData = inital
+	} else {
+		finalData = world
+	}
 
 	//writing world to .pgm file
 	sendWorld(finalData, c, p, filename, turn)
