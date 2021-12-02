@@ -204,7 +204,7 @@ func imageOut(turn int, fileout string, c distributorChannels) {
 //sends 'world' data byte by byte down c.ioOutput
 func sendWorld(world [][]byte, c distributorChannels, p Params, filename string, turn int) {
 	c.ioCommand <- ioOutput
-	fileout := filename + "x" + strconv.Itoa(turn) + "-" + strconv.Itoa(p.Threads)
+	fileout := filename + "x" + strconv.Itoa(turn)
 	c.ioFilename <- fileout
 	for i:=0; i<p.ImageHeight; i++ {
 		for z:=0; z<p.ImageWidth; z++{
